@@ -1,4 +1,3 @@
-#bot.py
 import os
 import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
@@ -91,7 +90,7 @@ def main():
     application.add_handler(MessageHandler(filters.PHOTO, handle_broadcast_photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     
-    # تشغيل البوت 
+    # تشغيل البوت
     if os.getenv('RAILWAY_ENVIRONMENT'):
         logger.info("Starting bot in Railway mode...")
         application.run_polling()
