@@ -217,11 +217,6 @@ async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     else:
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-async def back_to_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await show_user_menu(update, context, edit=True)
-
 async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -237,7 +232,8 @@ async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(f"🎥 **جميع المقاطع** ({len(videos)})", reply_markup=reply_markup)
-    # =============== دوال الرجوع ===============
+
+# =============== دوال الرجوع ===============
 
 async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """العودة للقائمة الرئيسية"""
@@ -909,7 +905,7 @@ async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup
     )
 
-# =============== دوال الإذاعة ===============
+# =============== دوال الإذاعة (مكتملة) ===============
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -996,6 +992,140 @@ async def broadcast_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(text, reply_markup=reply_markup)
 
+# =============== دوال استقبال وإرسال الإذاعة ===============
+
+async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة وإرسال الإذاعة النصية"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_text':
+        text = update.message.text.strip()
+        
+        if not text:
+            await update.message.reply_text("⚠️ يرجى إرسال نص صحيح!")
+            return
+        
+        await send_broadcast(update, context, text=text)
+        context.user_data['admin_action'] = None
+
+async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة وإرسال الإذاعة مع صورة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_photo':
+        if update.message.photo:
+            photo_file_id = update.message.photo[-1].file_id
+            context.user_data['broadcast_photo'] = photo_file_id
+            context.user_data['admin_action'] = 'waiting_broadcast_photo_caption'
+            await update.message.reply_text("✅ تم استلام الصورة!\n\n📝 أرسل النص المرافق (أو /skip للتخطي):")
+        else:
+            await update.message.reply_text("⚠️ يرجى إرسال صورة!")
+
+async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة نص الصورة وإرسال الإذاعة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_photo_caption':
+        text = update.message.text.strip()
+        photo_file_id = context.user_data.get('broadcast_photo')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, photo=photo_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_photo'] = None
+
+async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة وإرسال الإذاعة مع فيديو"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_video':
+        if update.message.video:
+            video_file_id = update.message.video.file_id
+            context.user_data['broadcast_video'] = video_file_id
+            context.user_data['admin_action'] = 'waiting_broadcast_video_caption'
+            await update.message.reply_text("✅ تم استلام الفيديو!\n\n📝 أرسل النص المرافق (أو /skip للتخطي):")
+        else:
+            await update.message.reply_text("⚠️ يرجى إرسال فيديو!")
+
+async def handle_broadcast_video_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة نص الفيديو وإرسال الإذاعة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_video_caption':
+        text = update.message.text.strip()
+        video_file_id = context.user_data.get('broadcast_video')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, video=video_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_video'] = None
+
+async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, text=None, photo=None, video=None, caption=None):
+    """إرسال الإذاعة لجميع المستخدمين"""
+    user_ids = get_all_users()
+    total = len(user_ids)
+    
+    if total == 0:
+        await update.message.reply_text("⚠️ لا يوجد مستخدمين!")
+        return
+    
+    msg = await update.message.reply_text(f"📢 جاري إرسال الإذاعة...\n👥 المستخدمين: {total}")
+    
+    success = 0
+    failed = 0
+    
+    for uid in user_ids:
+        try:
+            user_id = int(uid)
+            
+            if photo:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo,
+                    caption=caption or text or "📢 إذاعة من البوت"
+                )
+            elif video:
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=video,
+                    caption=caption or text or "📢 إذاعة من البوت"
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=text or "📢 إذاعة من البوت"
+                )
+            success += 1
+        except Exception as e:
+            failed += 1
+            logger.error(f"Failed to send broadcast to {uid}: {e}")
+    
+    await msg.edit_text(
+        f"✅ **تم إرسال الإذاعة!**\n\n"
+        f"✅ نجح: {success}\n"
+        f"❌ فشل: {failed}\n"
+        f"👥 المجموع: {total}"
+    )
+
 # =============== دوال الإحصائيات ===============
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1030,7 +1160,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(text, reply_markup=reply_markup)
 
-# =============== دوال العلامة المائية ===============
+# =============== دوال العلامة المائية (مكتملة) ===============
 
 async def admin_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1087,6 +1217,82 @@ async def watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📝 **إضافة علامة مائية (نص)**\n\nأرسل النص المطلوب\nمثال: @bexo50\n\n🔄 للإلغاء أرسل /cancel"
     )
 
+async def handle_watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة وحفظ نص العلامة المائية"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_watermark_text':
+        text = update.message.text.strip()
+        
+        if not text:
+            await update.message.reply_text("⚠️ يرجى إرسال نص صحيح!")
+            return
+        
+        with open('watermark_text.txt', 'w', encoding='utf-8') as f:
+            f.write(text)
+        
+        context.user_data['admin_action'] = None
+        
+        await update.message.reply_text(
+            f"✅ **تم تعيين العلامة المائية النصية!**\n\n"
+            f"📝 النص: `{text}`\n\n"
+            f"سيظهر هذا النص على جميع المقاطع."
+        )
+
+async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة وحفظ صورة العلامة المائية"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_watermark_image':
+        if update.message.photo:
+            try:
+                photo_file = await update.message.photo[-1].get_file()
+                await photo_file.download_to_drive('watermark.png')
+                
+                context.user_data['admin_action'] = None
+                
+                await update.message.reply_text(
+                    "✅ **تم تعيين العلامة المائية الصورية!**\n\n"
+                    "🖼️ سيظهر هذا الشعار على جميع المقاطع."
+                )
+            except Exception as e:
+                logger.error(f"Error saving watermark image: {e}")
+                await update.message.reply_text("⚠️ حدث خطأ أثناء حفظ الصورة!")
+        else:
+            await update.message.reply_text("⚠️ يرجى إرسال **صورة** بصيغة PNG.")
+
+async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إزالة العلامة المائية"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ للأدمن فقط!", show_alert=True)
+        return
+    
+    # حذف ملفات العلامة المائية
+    removed = []
+    for file in ['watermark.png', 'watermark_text.txt']:
+        if os.path.exists(file):
+            os.remove(file)
+            removed.append(file)
+    
+    if removed:
+        await query.message.edit_text(
+            f"✅ **تم إزالة العلامة المائية!**\n\n"
+            f"🗑️ تم حذف: {', '.join(removed)}"
+        )
+    else:
+        await query.message.edit_text(
+            "ℹ️ **لا توجد علامة مائية لإزالتها!**"
+        )
+
 # =============== معالج الرسائل الشامل ===============
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1096,6 +1302,21 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     admin_action = context.user_data.get('admin_action')
+    
+    # معالجة الإذاعة النصية
+    if admin_action == 'waiting_broadcast_text':
+        await handle_broadcast_text(update, context)
+        return
+    
+    # معالجة نص الصورة للإذاعة
+    if admin_action == 'waiting_broadcast_photo_caption':
+        await handle_broadcast_photo_caption(update, context)
+        return
+    
+    # معالجة نص الفيديو للإذاعة
+    if admin_action == 'waiting_broadcast_video_caption':
+        await handle_broadcast_video_caption(update, context)
+        return
     
     # معالجة اسم القائمة
     if admin_action == 'waiting_playlist_name':
@@ -1152,6 +1373,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     # معالجة اسم المقطع
     if admin_action == 'waiting_video_name':
         await handle_video_name(update, context)
+        return
+    
+    # معالجة نص العلامة المائية
+    if admin_action == 'waiting_watermark_text':
+        await handle_watermark_text(update, context)
         return
 
 # =============== main ===============
@@ -1219,6 +1445,9 @@ def main():
     # معالجة الرسائل
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video_file))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_watermark_image))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_broadcast_photo))
+    application.add_handler(MessageHandler(filters.VIDEO, handle_broadcast_video))
     
     # تشغيل البوت
     if os.getenv('RAILWAY_ENVIRONMENT'):
