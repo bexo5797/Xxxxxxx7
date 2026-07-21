@@ -88,19 +88,48 @@ def increment_view(video_name, user_id):
         stats[video_name]['users'].append(user_id)
     save_stats(stats)
 
-# =============== دوال المستخدم ===============
+# =============== دوال العرض الرئيسية ===============
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False, query=None):
+    """عرض القائمة الرئيسية للأدمن"""
+    user_id = update.effective_user.id if hasattr(update, 'effective_user') else query.from_user.id
+    
+    if is_admin(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
+            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}"
+    elif is_moderator(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"👋 مرحباً أيها المشرف!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}"
+    else:
+        # للمستخدم العادي
+        await show_user_menu(update, context)
+        return
+    
+    if edit and query:
+        await query.message.edit_text(text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False):
     """عرض قائمة المستخدم"""
     keyboard = []
     
-    # عرض القوائم
     if playlists:
         for name in playlists.keys():
             count = len(playlists[name])
             keyboard.append([InlineKeyboardButton(f"📂 {name} ({count})", callback_data=f'playlist_{name}')])
     
-    # عرض المقاطع الفردية
     if videos:
         keyboard.append([InlineKeyboardButton("🎬 جميع المقاطع", callback_data='all_videos')])
     
@@ -114,6 +143,45 @@ async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
         await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
     else:
         await update.message.reply_text(text, reply_markup=reply_markup)
+
+# =============== دوال البداية ===============
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء البوت"""
+    user_id = update.effective_user.id
+    context.user_data.clear()
+    
+    if is_admin(user_id) or is_moderator(user_id):
+        await show_main_menu(update, context)
+    else:
+        # للمستخدم العادي - التحقق من الاشتراك
+        try:
+            member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
+            if member.status in ['member', 'administrator', 'creator']:
+                await show_user_menu(update, context)
+            else:
+                keyboard = [
+                    [InlineKeyboardButton("📢 اشترك في القناة", url=f'https://t.me/{CHANNEL_USERNAME}')],
+                    [InlineKeyboardButton("✅ تحقق", callback_data='check_subscription')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await update.message.reply_text(
+                    f"⚠️ يرجى الاشتراك في القناة:\n👉 @{CHANNEL_USERNAME}",
+                    reply_markup=reply_markup
+                )
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            await update.message.reply_text("⚠️ حدث خطأ!")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إلغاء العملية الحالية"""
+    user_id = update.effective_user.id
+    if is_staff(user_id):
+        context.user_data.clear()
+        await update.message.reply_text("✅ تم الإلغاء!")
+        await start(update, context)
+
+# =============== دوال المستخدم ===============
 
 async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض جميع المقاطع"""
@@ -138,6 +206,23 @@ async def back_to_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await show_user_menu(update, context, edit=True)
 
+async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """التحقق من الاشتراك"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    try:
+        member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            await show_user_menu(update, context, edit=True)
+        else:
+            await query.answer("❌ لم تشترك بعد!", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await query.answer("حدث خطأ!", show_alert=True)
+
 # =============== دوال تشغيل الفيديو ===============
 
 async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,7 +233,6 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     video_name = query.data.replace('play_', '')
     
-    # التحقق من الاشتراك للمستخدم العادي
     if not is_staff(user_id):
         try:
             member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
@@ -173,7 +257,6 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             increment_view(video_name, user_id)
             caption = f"🎥 {video_name}"
             
-            # إضافة العلامة المائية النصية إذا وجدت
             if os.path.exists('watermark_text.txt'):
                 with open('watermark_text.txt', 'r', encoding='utf-8') as f:
                     watermark = f.read().strip()
@@ -186,99 +269,6 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("⚠️ حدث خطأ في إرسال الفيديو")
     else:
         await query.message.reply_text("⚠️ المقطع غير موجود!")
-
-async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """التحقق من الاشتراك"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    try:
-        member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
-        if member.status in ['member', 'administrator', 'creator']:
-            await show_user_menu(update, context, edit=True)
-        else:
-            await query.answer("❌ لم تشترك بعد!", show_alert=True)
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await query.answer("حدث خطأ!", show_alert=True)
-
-# =============== دوال الأدمن ===============
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدء البوت"""
-    user_id = update.effective_user.id
-    
-    # تنظيف البيانات المؤقتة
-    context.user_data.clear()
-    
-    if is_admin(user_id):
-        keyboard = [
-            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
-            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
-            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
-            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            f"👋 مرحباً أيها الأدمن!\n\n"
-            f"📹 عدد المقاطع: {len(videos)}\n"
-            f"📂 عدد القوائم: {len(playlists)}\n"
-            f"👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}",
-            reply_markup=reply_markup
-        )
-        return
-    
-    if is_moderator(user_id):
-        keyboard = [
-            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
-            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
-            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            f"👋 مرحباً أيها المشرف!\n\n"
-            f"📹 عدد المقاطع: {len(videos)}\n"
-            f"📂 عدد القوائم: {len(playlists)}",
-            reply_markup=reply_markup
-        )
-        return
-    
-    # للمستخدم العادي
-    try:
-        member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
-        if member.status in ['member', 'administrator', 'creator']:
-            await show_user_menu(update, context)
-        else:
-            keyboard = [
-                [InlineKeyboardButton("📢 اشترك في القناة", url=f'https://t.me/{CHANNEL_USERNAME}')],
-                [InlineKeyboardButton("✅ تحقق", callback_data='check_subscription')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                f"⚠️ يرجى الاشتراك في القناة:\n👉 @{CHANNEL_USERNAME}",
-                reply_markup=reply_markup
-            )
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        await update.message.reply_text("⚠️ حدث خطأ!")
-
-async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """العودة للقائمة الرئيسية"""
-    query = update.callback_query
-    await query.answer()
-    # إنشاء رسالة جديدة بدلاً من التعديل
-    await query.message.reply_text("🔄 جاري العودة...")
-    await start(update, context)
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إلغاء العملية الحالية"""
-    user_id = update.effective_user.id
-    if is_staff(user_id):
-        context.user_data.clear()
-        await update.message.reply_text("✅ تم الإلغاء!")
-        await start(update, context)
 
 # =============== دوال إدارة المقاطع ===============
 
@@ -399,11 +389,9 @@ async def delete_video_callback(update: Update, context: ContextTypes.DEFAULT_TY
     video_name = query.data.replace('delete_', '')
     
     if video_name in videos:
-        # حذف من المقاطع
         del videos[video_name]
         save_videos(videos)
         
-        # حذف من جميع القوائم
         for playlist_name in list(playlists.keys()):
             if video_name in playlists[playlist_name]:
                 playlists[playlist_name].remove(video_name)
@@ -462,7 +450,6 @@ async def confirm_delete_all(update: Update, context: ContextTypes.DEFAULT_TYPE)
     videos.clear()
     save_videos(videos)
     
-    # حذف المقاطع من القوائم أيضاً
     for playlist_name in list(playlists.keys()):
         playlists[playlist_name] = []
         save_playlists(playlists)
@@ -522,8 +509,14 @@ async def handle_playlist_name(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_staff(user_id):
         return
     
-    if context.user_data.get('admin_action') == 'waiting_playlist_name':
+    admin_action = context.user_data.get('admin_action')
+    
+    if admin_action == 'waiting_playlist_name':
         playlist_name = update.message.text.strip()
+        
+        if not playlist_name:
+            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
+            return
         
         if playlist_name in playlists:
             await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{playlist_name}'")
@@ -536,8 +529,11 @@ async def handle_playlist_name(update: Update, context: ContextTypes.DEFAULT_TYP
         
         await update.message.reply_text(
             f"✅ تم إنشاء القائمة **{playlist_name}** بنجاح!\n"
-            f"📂 القائمة فارغة حالياً، يمكنك إضافة مقاطع لها."
+            f"📂 القائمة فارغة حالياً، يمكنك إضافة مقاطع لها.\n\n"
+            f"استخدم /start للعودة للقائمة الرئيسية"
         )
+    else:
+        await update.message.reply_text("⚠️ لا توجد عملية نشطة. استخدم /start")
 
 async def add_to_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إضافة مقطع لقائمة"""
@@ -590,7 +586,6 @@ async def add_video_to_playlist_callback(update: Update, context: ContextTypes.D
     query = update.callback_query
     await query.answer()
     
-    # استخراج البيانات من callback_data
     data = query.data.replace('add_video_to_', '')
     parts = data.split('_')
     playlist_name = '_'.join(parts[:-1])
@@ -719,12 +714,18 @@ async def handle_sub_playlist_name(update: Update, context: ContextTypes.DEFAULT
     if not is_staff(user_id):
         return
     
-    if context.user_data.get('admin_action') == 'waiting_sub_playlist_name':
+    admin_action = context.user_data.get('admin_action')
+    
+    if admin_action == 'waiting_sub_playlist_name':
         sub_name = update.message.text.strip()
         parent_name = context.user_data.get('parent_playlist')
         
+        if not sub_name:
+            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
+            return
+        
         if not parent_name or parent_name not in playlists:
-            await update.message.reply_text("⚠️ حدث خطأ! يرجى المحاولة مرة أخرى.")
+            await update.message.reply_text("⚠️ حدث خطأ! القائمة الرئيسية غير موجودة.")
             return
         
         full_name = f"{parent_name} › {sub_name}"
@@ -741,9 +742,10 @@ async def handle_sub_playlist_name(update: Update, context: ContextTypes.DEFAULT
         
         await update.message.reply_text(
             f"✅ تم إنشاء القائمة الفرعية **{sub_name}**\n"
-            f"📂 ضمن القائمة: **{parent_name}**\n\n"
-            f"📌 المسار: {full_name}"
+            f"📂 ضمن القائمة: **{parent_name}**"
         )
+    else:
+        await update.message.reply_text("⚠️ لا توجد عملية نشطة. استخدم /start")
 
 # =============== دوال ترتيب القوائم ===============
 
@@ -901,7 +903,6 @@ async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYP
     
     videos_list = playlists[playlist_name]
     
-    # البحث عن القوائم الفرعية
     sub_playlists = []
     for name in playlists.keys():
         if name.startswith(f"{playlist_name} › "):
@@ -909,13 +910,11 @@ async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYP
     
     keyboard = []
     
-    # عرض القوائم الفرعية
     for sub_name in sub_playlists:
         display_name = sub_name.replace(f"{playlist_name} › ", "")
         count = len(playlists[sub_name])
         keyboard.append([InlineKeyboardButton(f"📂 {display_name} ({count})", callback_data=f'playlist_{sub_name}')])
     
-    # عرض المقاطع
     for video_name in videos_list:
         if video_name in videos:
             keyboard.append([InlineKeyboardButton(f"🎬 {video_name}", callback_data=f'play_{video_name}')])
@@ -952,7 +951,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for s in stats.values():
         total_users.update(s.get('users', []))
     
-    # أكثر المقاطع مشاهدة
     sorted_videos = sorted(stats.items(), key=lambda x: x[1].get('views', 0), reverse=True)
     top_videos = sorted_videos[:3]
     
@@ -1080,6 +1078,39 @@ async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(file)
     
     await query.message.edit_text("✅ تم إزالة العلامة المائية!")
+
+# =============== دوال الرجوع ===============
+
+async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """العودة للقائمة الرئيسية"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    context.user_data.clear()
+    
+    if is_admin(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
+            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}"
+    elif is_moderator(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"👋 مرحباً أيها المشرف!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}"
+    else:
+        await show_user_menu(update, context, edit=True)
+        return
+    
+    await query.message.edit_text(text, reply_markup=reply_markup)
 
 # =============== main ===============
 
