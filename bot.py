@@ -561,7 +561,7 @@ async def create_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_action'] = 'waiting_playlist_name'
     await query.message.edit_text(
-        "📂 **إنشاء قائمة جديدة**\n\n✏️ أرسل **اسم القائمة**\nمثال: أجمل الأهداف\n\n🔄 للإلغاء أرسل /cancel"
+        "📂 **إنشاء قائمة جديدة**\n\n✏️ أرسل **اسم القائمة**\nمثال: أجمل_الأهداف\n\n🔄 للإلغاء أرسل /cancel"
     )
 
 async def add_to_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -609,13 +609,22 @@ async def select_playlist_for_add(update: Update, context: ContextTypes.DEFAULT_
     await query.message.edit_text(f"📂 **إضافة مقطع لقائمة {playlist_name}:**", reply_markup=reply_markup)
 
 async def add_video_to_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إضافة مقطع محدد لقائمة - مُصلح للتعامل مع المسافات"""
     query = update.callback_query
     await query.answer()
     
+    # استخراج البيانات من callback_data
     data = query.data.replace('add_video_to_', '')
-    parts = data.split('_')
-    playlist_name = '_'.join(parts[:-1])
-    video_name = parts[-1]
+    
+    # فصل اسم القائمة واسم المقطع باستخدام rsplit (آخر جزء هو اسم المقطع)
+    parts = data.rsplit('_', 1)
+    
+    if len(parts) != 2:
+        await query.answer("⚠️ حدث خطأ في البيانات!", show_alert=True)
+        return
+    
+    playlist_name = parts[0]
+    video_name = parts[1]
     
     if playlist_name in playlists:
         if video_name not in playlists[playlist_name]:
@@ -722,8 +731,42 @@ async def select_sub_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['admin_action'] = 'waiting_sub_playlist_name'
     
     await query.message.edit_text(
-        f"📂 **قائمة فرعية في: {parent_name}**\n\n✏️ أرسل اسم القائمة الفرعية:\nمثال: أهداف 2024\n\n🔄 للإلغاء أرسل /cancel"
+        f"📂 **قائمة فرعية في: {parent_name}**\n\n✏️ أرسل اسم القائمة الفرعية:\nمثال: أهداف_2024\n\n🔄 للإلغاء أرسل /cancel"
     )
+
+async def handle_sub_playlist_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if not is_staff(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_sub_playlist_name':
+        sub_name = update.message.text.strip()
+        parent_name = context.user_data.get('parent_playlist')
+        
+        if not sub_name:
+            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
+            return
+        
+        if not parent_name or parent_name not in playlists:
+            await update.message.reply_text("⚠️ حدث خطأ! القائمة الرئيسية غير موجودة.")
+            return
+        
+        full_name = f"{parent_name} › {sub_name}"
+        
+        if full_name in playlists:
+            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{sub_name}' في {parent_name}")
+            return
+        
+        playlists[full_name] = []
+        save_playlists(playlists)
+        
+        context.user_data['admin_action'] = None
+        context.user_data['parent_playlist'] = None
+        
+        await update.message.reply_text(
+            f"✅ **تم إنشاء القائمة الفرعية!**\n\n📌 الاسم: **{sub_name}**\n📂 ضمن القائمة: **{parent_name}**"
+        )
 
 # =============== دوال ترتيب القوائم ===============
 
@@ -905,7 +948,7 @@ async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup
     )
 
-# =============== دوال الإذاعة (مكتملة) ===============
+# =============== دوال الإذاعة ===============
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -995,7 +1038,6 @@ async def broadcast_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============== دوال استقبال وإرسال الإذاعة ===============
 
 async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وإرسال الإذاعة النصية"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1012,7 +1054,6 @@ async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['admin_action'] = None
 
 async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وإرسال الإذاعة مع صورة"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1028,7 +1069,6 @@ async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⚠️ يرجى إرسال صورة!")
 
 async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة نص الصورة وإرسال الإذاعة"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1046,7 +1086,6 @@ async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.D
         context.user_data['broadcast_photo'] = None
 
 async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وإرسال الإذاعة مع فيديو"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1062,7 +1101,6 @@ async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⚠️ يرجى إرسال فيديو!")
 
 async def handle_broadcast_video_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة نص الفيديو وإرسال الإذاعة"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1080,7 +1118,6 @@ async def handle_broadcast_video_caption(update: Update, context: ContextTypes.D
         context.user_data['broadcast_video'] = None
 
 async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, text=None, photo=None, video=None, caption=None):
-    """إرسال الإذاعة لجميع المستخدمين"""
     user_ids = get_all_users()
     total = len(user_ids)
     
@@ -1160,7 +1197,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(text, reply_markup=reply_markup)
 
-# =============== دوال العلامة المائية (مكتملة) ===============
+# =============== دوال العلامة المائية ===============
 
 async def admin_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1218,7 +1255,6 @@ async def watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وحفظ نص العلامة المائية"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1238,12 +1274,10 @@ async def handle_watermark_text(update: Update, context: ContextTypes.DEFAULT_TY
         
         await update.message.reply_text(
             f"✅ **تم تعيين العلامة المائية النصية!**\n\n"
-            f"📝 النص: `{text}`\n\n"
-            f"سيظهر هذا النص على جميع المقاطع."
+            f"📝 النص: `{text}`"
         )
 
 async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة وحفظ صورة العلامة المائية"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1258,8 +1292,7 @@ async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_T
                 context.user_data['admin_action'] = None
                 
                 await update.message.reply_text(
-                    "✅ **تم تعيين العلامة المائية الصورية!**\n\n"
-                    "🖼️ سيظهر هذا الشعار على جميع المقاطع."
+                    "✅ **تم تعيين العلامة المائية الصورية!**"
                 )
             except Exception as e:
                 logger.error(f"Error saving watermark image: {e}")
@@ -1268,7 +1301,6 @@ async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⚠️ يرجى إرسال **صورة** بصيغة PNG.")
 
 async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إزالة العلامة المائية"""
     query = update.callback_query
     await query.answer()
     
@@ -1276,7 +1308,6 @@ async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ للأدمن فقط!", show_alert=True)
         return
     
-    # حذف ملفات العلامة المائية
     removed = []
     for file in ['watermark.png', 'watermark_text.txt']:
         if os.path.exists(file):
@@ -1285,8 +1316,7 @@ async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if removed:
         await query.message.edit_text(
-            f"✅ **تم إزالة العلامة المائية!**\n\n"
-            f"🗑️ تم حذف: {', '.join(removed)}"
+            f"✅ **تم إزالة العلامة المائية!**\n\n🗑️ تم حذف: {', '.join(removed)}"
         )
     else:
         await query.message.edit_text(
@@ -1342,32 +1372,7 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # معالجة اسم القائمة الفرعية
     if admin_action == 'waiting_sub_playlist_name':
-        sub_name = update.message.text.strip()
-        parent_name = context.user_data.get('parent_playlist')
-        
-        if not sub_name:
-            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
-            return
-        
-        if not parent_name or parent_name not in playlists:
-            await update.message.reply_text("⚠️ حدث خطأ! القائمة الرئيسية غير موجودة.")
-            return
-        
-        full_name = f"{parent_name} › {sub_name}"
-        
-        if full_name in playlists:
-            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{sub_name}' في {parent_name}")
-            return
-        
-        playlists[full_name] = []
-        save_playlists(playlists)
-        
-        context.user_data['admin_action'] = None
-        context.user_data['parent_playlist'] = None
-        
-        await update.message.reply_text(
-            f"✅ **تم إنشاء القائمة الفرعية!**\n\n📌 الاسم: **{sub_name}**\n📂 ضمن القائمة: **{parent_name}**"
-        )
+        await handle_sub_playlist_name(update, context)
         return
     
     # معالجة اسم المقطع
