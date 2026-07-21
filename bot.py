@@ -237,6 +237,48 @@ async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(f"🎥 **جميع المقاطع** ({len(videos)})", reply_markup=reply_markup)
+    # =============== دوال الرجوع ===============
+
+async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """العودة للقائمة الرئيسية"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    context.user_data.clear()
+    
+    if is_admin(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📢 الإذاعة", callback_data='admin_broadcast')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
+            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👥 المستخدمين: {len(get_all_users())}\n👀 المشاهدات: {sum(s.get('views', 0) for s in stats.values())}",
+            reply_markup=reply_markup
+        )
+    elif is_moderator(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            f"👋 مرحباً أيها المشرف!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}",
+            reply_markup=reply_markup
+        )
+    else:
+        await show_user_menu(update, context, edit=True)
+
+async def back_to_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """العودة لقائمة المستخدم"""
+    query = update.callback_query
+    await query.answer()
+    await show_user_menu(update, context, edit=True)
 
 # =============== دوال تشغيل الفيديو ===============
 
