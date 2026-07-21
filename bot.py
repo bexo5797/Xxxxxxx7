@@ -15,8 +15,13 @@ logger = logging.getLogger(__name__)
 
 # قراءة المتغيرات
 TOKEN = os.getenv('BOT_TOKEN')
+if not TOKEN:
+    raise ValueError("BOT_TOKEN is not set!")
+
 CHANNEL_USERNAME = os.getenv('CHANNEL_USERNAME', 'bexo50')
 ADMIN_ID = int(os.getenv('ADMIN_ID', 0))
+if not ADMIN_ID:
+    raise ValueError("ADMIN_ID is not set!")
 
 # =============== إصلاح المشكلة 5: معالجة آمنة للمشرفين ===============
 MODERATORS = []
@@ -86,49 +91,32 @@ async def save_users_async(users):
         with open(USERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(users, f, ensure_ascii=False, indent=2)
 
-# =============== دوال التحميل المتزامنة (للبداية) ===============
-
+# دوال متزامنة تستخدم القفل أيضاً
 def load_videos():
-    if os.path.exists(VIDEOS_FILE):
-        with open(VIDEOS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    return asyncio.run(load_videos_async())
 
 def load_playlists():
-    if os.path.exists(PLAYLISTS_FILE):
-        with open(PLAYLISTS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    return asyncio.run(load_playlists_async())
 
 def load_stats():
-    if os.path.exists(STATS_FILE):
-        with open(STATS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    return asyncio.run(load_stats_async())
 
 def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return {}
+    return asyncio.run(load_users_async())
 
 def save_videos(videos):
-    with open(VIDEOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(videos, f, ensure_ascii=False, indent=2)
+    asyncio.run(save_videos_async(videos))
 
 def save_playlists(playlists):
-    with open(PLAYLISTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(playlists, f, ensure_ascii=False, indent=2)
+    asyncio.run(save_playlists_async(playlists))
 
 def save_stats(stats):
-    with open(STATS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(stats, f, ensure_ascii=False, indent=2)
+    asyncio.run(save_stats_async(stats))
 
 def save_users(users):
-    with open(USERS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
+    asyncio.run(save_users_async(users))
 
-# تحميل البيانات
+# تحميل البيانات عند بدء التشغيل (استخدام الدوال المتزامنة)
 videos = load_videos()
 playlists = load_playlists()
 stats = load_stats()
@@ -343,7 +331,8 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user_id = query.from_user.id
-    video_name = query.data.replace('play_', '')
+    # استخراج اسم الفيديو من pattern ^play_(.+)$
+    video_name = query.data[5:]  # بعد "play_"
     
     if not is_staff(user_id):
         try:
@@ -490,6 +479,9 @@ async def handle_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ حدث خطأ أثناء حفظ الفيديو!")
         else:
             await update.message.reply_text("⚠️ يرجى إرسال **فيديو** وليس نص أو صورة.")
+    else:
+        # إذا لم يكن في سياق إضافة مقطع
+        await update.message.reply_text("⚠️ لا يوجد إجراء نشط لإضافة فيديو. استخدم /start للبدء.")
 
 async def admin_delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -505,7 +497,7 @@ async def admin_delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     keyboard = []
     for name in videos.keys():
-        keyboard.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f'delete_{name}')])
+        keyboard.append([InlineKeyboardButton(f"🗑️ {name}", callback_data=f'delete_video_{name}')])
     keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data='admin_panel')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -519,12 +511,14 @@ async def delete_video_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("⚠️ هذا الإجراء للفريق فقط!", show_alert=True)
         return
     
-    video_name = query.data.replace('delete_', '')
+    # استخراج اسم الفيديو بعد "delete_video_"
+    video_name = query.data[13:]  # len("delete_video_") = 13
     
     if video_name in videos:
         del videos[video_name]
         save_videos(videos)
         
+        # حذف المقطع من جميع القوائم
         for playlist_name in list(playlists.keys()):
             if video_name in playlists[playlist_name]:
                 playlists[playlist_name].remove(video_name)
@@ -659,7 +653,11 @@ async def select_playlist_for_add(update: Update, context: ContextTypes.DEFAULT_
     keyboard = []
     for video_name in videos.keys():
         if video_name not in playlists.get(playlist_name, []):
-            keyboard.append([InlineKeyboardButton(f"➕ {video_name}", callback_data=f'add_video_to_{playlist_name}_{video_name}')])
+            # استخدام فاصل آمن || لتجنب مشكلة الشرطات السفلية
+            keyboard.append([InlineKeyboardButton(
+                f"➕ {video_name}",
+                callback_data=f'add_video_to_{playlist_name}||{video_name}'
+            )])
     
     if not keyboard:
         await query.message.edit_text(f"✅ جميع المقاطع موجودة في **{playlist_name}**!")
@@ -669,25 +667,17 @@ async def select_playlist_for_add(update: Update, context: ContextTypes.DEFAULT_
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(f"📂 **إضافة مقطع لقائمة {playlist_name}:**", reply_markup=reply_markup)
 
-# =============== إصلاح المشكلة 2: تحسين pattern للقوائم ===============
-
 async def add_video_to_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إضافة مقطع محدد لقائمة - مُصلح للتعامل مع المسافات"""
+    """إضافة مقطع محدد لقائمة - باستخدام فاصل آمن ||"""
     query = update.callback_query
     await query.answer()
     
-    # استخراج البيانات من callback_data
     data = query.data.replace('add_video_to_', '')
-    
-    # فصل اسم القائمة واسم المقطع باستخدام rsplit (آخر جزء هو اسم المقطع)
-    parts = data.rsplit('_', 1)
-    
-    if len(parts) != 2:
+    if '||' not in data:
         await query.answer("⚠️ حدث خطأ في البيانات!", show_alert=True)
         return
     
-    playlist_name = parts[0]
-    video_name = parts[1]
+    playlist_name, video_name = data.split('||', 1)
     
     if playlist_name in playlists:
         if video_name not in playlists[playlist_name]:
@@ -701,42 +691,6 @@ async def add_video_to_playlist_callback(update: Update, context: ContextTypes.D
             await admin_playlists(update, context)
         else:
             await query.answer("⚠️ هذا المقطع موجود بالفعل!", show_alert=True)
-
-# =============== إصلاح المشكلة 3: تحسين معالجة حالة الإذاعة ===============
-
-async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    if context.user_data.get('admin_action') == 'waiting_broadcast_photo_caption':
-        text = update.message.text.strip()
-        photo_file_id = context.user_data.get('broadcast_photo')
-        
-        if text == '/skip':
-            text = None
-        
-        await send_broadcast(update, context, photo=photo_file_id, caption=text)
-        context.user_data['admin_action'] = None
-        context.user_data['broadcast_photo'] = None
-
-async def handle_broadcast_video_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id):
-        return
-    
-    if context.user_data.get('admin_action') == 'waiting_broadcast_video_caption':
-        text = update.message.text.strip()
-        video_file_id = context.user_data.get('broadcast_video')
-        
-        if text == '/skip':
-            text = None
-        
-        await send_broadcast(update, context, video=video_file_id, caption=text)
-        context.user_data['admin_action'] = None
-        context.user_data['broadcast_video'] = None
 
 async def delete_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -902,7 +856,8 @@ async def reorder_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ هذا الإجراء للفريق فقط!", show_alert=True)
         return
     
-    playlist_name = query.data.replace('reorder_', '')
+    # استخراج اسم القائمة من pattern ^reorder_(.+)$
+    playlist_name = query.data[8:]  # بعد "reorder_"
     
     if playlist_name not in playlists or not playlists[playlist_name]:
         await query.answer("⚠️ القائمة فارغة!", show_alert=True)
@@ -1002,8 +957,6 @@ async def finish_reorder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # =============== دوال عرض القوائم للمستخدم ===============
-
-# =============== إصلاح المشكلة 2: تحسين pattern للقوائم ===============
 
 async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1169,6 +1122,25 @@ async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("✅ تم استلام الصورة!\n\n📝 أرسل النص المرافق (أو /skip للتخطي):")
         else:
             await update.message.reply_text("⚠️ يرجى إرسال صورة!")
+    else:
+        await update.message.reply_text("⚠️ لا يوجد إجراء نشط لإذاعة صورة.")
+
+async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_photo_caption':
+        text = update.message.text.strip()
+        photo_file_id = context.user_data.get('broadcast_photo')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, photo=photo_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_photo'] = None
 
 async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1184,6 +1156,25 @@ async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("✅ تم استلام الفيديو!\n\n📝 أرسل النص المرافق (أو /skip للتخطي):")
         else:
             await update.message.reply_text("⚠️ يرجى إرسال فيديو!")
+    else:
+        await update.message.reply_text("⚠️ لا يوجد إجراء نشط لإذاعة فيديو.")
+
+async def handle_broadcast_video_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_video_caption':
+        text = update.message.text.strip()
+        video_file_id = context.user_data.get('broadcast_video')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, video=video_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_video'] = None
 
 async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, text=None, photo=None, video=None, caption=None):
     user_ids = get_all_users()
@@ -1198,31 +1189,46 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     success = 0
     failed = 0
     
-    for uid in user_ids:
-        try:
-            user_id = int(uid)
-            
-            if photo:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=photo,
-                    caption=caption or text or "📢 إذاعة من البوت"
-                )
-            elif video:
-                await context.bot.send_video(
-                    chat_id=user_id,
-                    video=video,
-                    caption=caption or text or "📢 إذاعة من البوت"
-                )
-            else:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=text or "📢 إذاعة من البوت"
-                )
-            success += 1
-        except Exception as e:
-            failed += 1
-            logger.error(f"Failed to send broadcast to {uid}: {e}")
+    # إرسال على دفعات لتجنب تجاوز حد الطلبات
+    batch_size = 30
+    for i in range(0, total, batch_size):
+        batch = user_ids[i:i+batch_size]
+        tasks = []
+        for uid in batch:
+            try:
+                user_id = int(uid)
+                if photo:
+                    tasks.append(context.bot.send_photo(
+                        chat_id=user_id,
+                        photo=photo,
+                        caption=caption or text or "📢 إذاعة من البوت"
+                    ))
+                elif video:
+                    tasks.append(context.bot.send_video(
+                        chat_id=user_id,
+                        video=video,
+                        caption=caption or text or "📢 إذاعة من البوت"
+                    ))
+                else:
+                    tasks.append(context.bot.send_message(
+                        chat_id=user_id,
+                        text=text or "📢 إذاعة من البوت"
+                    ))
+            except Exception as e:
+                failed += 1
+                logger.error(f"Failed to send broadcast to {uid}: {e}")
+        
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    failed += 1
+                else:
+                    success += 1
+        
+        # انتظار قليل بين الدفعات
+        if i + batch_size < total:
+            await asyncio.sleep(1)
     
     await msg.edit_text(
         f"✅ **تم إرسال الإذاعة!**\n\n"
@@ -1367,6 +1373,8 @@ async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_T
                 await update.message.reply_text("⚠️ حدث خطأ أثناء حفظ الصورة!")
         else:
             await update.message.reply_text("⚠️ يرجى إرسال **صورة** بصيغة PNG.")
+    else:
+        await update.message.reply_text("⚠️ لا يوجد إجراء نشط لتعيين علامة مائية صورة.")
 
 async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1392,8 +1400,6 @@ async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # =============== معالج الرسائل الشامل ===============
-
-# =============== إصلاح المشكلة 3: تحسين معالجة حالة الإذاعة ===============
 
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -1454,6 +1460,9 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if admin_action == 'waiting_watermark_text':
         await handle_watermark_text(update, context)
         return
+    
+    # إذا لم توجد حالة نشطة
+    await update.message.reply_text("⚠️ لا يوجد إجراء نشط. استخدم /start للبدء.")
 
 # =============== main ===============
 
@@ -1471,7 +1480,8 @@ def main():
     application.add_handler(CallbackQueryHandler(admin_list_videos, pattern='^admin_list_videos$'))
     application.add_handler(CallbackQueryHandler(admin_delete_all, pattern='^admin_delete_all$'))
     application.add_handler(CallbackQueryHandler(confirm_delete_all, pattern='^confirm_delete_all$'))
-    application.add_handler(CallbackQueryHandler(delete_video_callback, pattern='^delete_'))
+    # نمط محدد لحذف فيديو
+    application.add_handler(CallbackQueryHandler(delete_video_callback, pattern='^delete_video_'))
     
     # القوائم
     application.add_handler(CallbackQueryHandler(admin_playlists, pattern='^admin_playlists$'))
@@ -1517,16 +1527,11 @@ def main():
     application.add_handler(CallbackQueryHandler(watermark_text, pattern='^watermark_text$'))
     application.add_handler(CallbackQueryHandler(watermark_remove, pattern='^watermark_remove$'))
     
-    # =============== إصلاح المشكلة 1: معالجة وسائط غير متداخلة ===============
-    # معالجة الفيديو - نتحقق من السياق أولاً داخل الدالة
+    # معالجة الوسائط - مع ردود افتراضية
     application.add_handler(MessageHandler(filters.VIDEO, handle_video_file))
     application.add_handler(MessageHandler(filters.VIDEO, handle_broadcast_video))
-    
-    # معالجة الصور - نتحقق من السياق أولاً داخل الدالة
     application.add_handler(MessageHandler(filters.PHOTO, handle_watermark_image))
     application.add_handler(MessageHandler(filters.PHOTO, handle_broadcast_photo))
-    
-    # معالجة النصوص
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     
     # تشغيل البوت
