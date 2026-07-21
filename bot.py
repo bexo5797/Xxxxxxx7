@@ -22,6 +22,7 @@ MODERATORS = [int(id.strip()) for id in os.getenv('MODERATORS', '').split(',') i
 VIDEOS_FILE = 'videos.json'
 PLAYLISTS_FILE = 'playlists.json'
 STATS_FILE = 'stats.json'
+USERS_FILE = 'users.json'
 
 # =============== دوال التخزين ===============
 
@@ -43,6 +44,12 @@ def load_stats():
             return json.load(f)
     return {}
 
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
 def save_videos(videos):
     with open(VIDEOS_FILE, 'w', encoding='utf-8') as f:
         json.dump(videos, f, ensure_ascii=False, indent=2)
@@ -55,10 +62,15 @@ def save_stats(stats):
     with open(STATS_FILE, 'w', encoding='utf-8') as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
 
+def save_users(users):
+    with open(USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
 # تحميل البيانات
 videos = load_videos()
 playlists = load_playlists()
 stats = load_stats()
+users = load_users()
 
 # =============== دوال الصلاحيات ===============
 
@@ -71,38 +83,379 @@ def is_moderator(user_id):
 def is_staff(user_id):
     return is_admin(user_id) or is_moderator(user_id)
 
-def get_user_role(user_id):
-    if is_admin(user_id):
-        return "👑 أدمن رئيسي"
-    elif is_moderator(user_id):
-        return "🛡️ مشرف"
-    return "👤 مستخدم"
+# =============== دوال المستخدمين ===============
 
-# =============== دوال الإحصائيات ===============
+def save_user(user_id, username=None, first_name=None):
+    """حفظ بيانات المستخدم"""
+    if str(user_id) not in users:
+        users[str(user_id)] = {
+            'id': user_id,
+            'username': username,
+            'first_name': first_name,
+            'joined_at': datetime.now().isoformat(),
+            'last_active': datetime.now().isoformat()
+        }
+        save_users(users)
+    else:
+        users[str(user_id)]['last_active'] = datetime.now().isoformat()
+        if username:
+            users[str(user_id)]['username'] = username
+        if first_name:
+            users[str(user_id)]['first_name'] = first_name
+        save_users(users)
 
-def increment_view(video_name, user_id):
-    if video_name not in stats:
-        stats[video_name] = {'views': 0, 'users': []}
-    stats[video_name]['views'] += 1
-    if user_id not in stats[video_name]['users']:
-        stats[video_name]['users'].append(user_id)
-    save_stats(stats)
+def get_all_users():
+    """الحصول على جميع المستخدمين"""
+    return list(users.keys())
 
-# =============== دوال العرض الرئيسية ===============
+# =============== دوال الإذاعة ===============
 
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False, query=None):
-    """عرض القائمة الرئيسية للأدمن"""
-    user_id = update.effective_user.id if hasattr(update, 'effective_user') else query.from_user.id
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """لوحة الإذاعة"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ هذا الإجراء للأدمن فقط!", show_alert=True)
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("📝 رسالة نصية", callback_data='broadcast_text')],
+        [InlineKeyboardButton("🖼️ صورة + نص", callback_data='broadcast_photo')],
+        [InlineKeyboardButton("🎬 فيديو + نص", callback_data='broadcast_video')],
+        [InlineKeyboardButton("📊 عدد المستخدمين", callback_data='broadcast_stats')],
+        [InlineKeyboardButton("🔙 رجوع", callback_data='back_to_start')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    user_count = len(get_all_users())
+    await query.message.edit_text(
+        f"📢 **لوحة الإذاعة**\n\n"
+        f"👥 عدد المستخدمين المسجلين: {user_count}\n\n"
+        f"اختر نوع الإذاعة:",
+        reply_markup=reply_markup
+    )
+
+async def broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إرسال إذاعة نصية"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ هذا الإجراء للأدمن فقط!", show_alert=True)
+        return
+    
+    context.user_data['admin_action'] = 'waiting_broadcast_text'
+    await query.message.edit_text(
+        "📝 **إذاعة نصية**\n\n"
+        "✏️ أرسل النص الذي تريد إذاعته لجميع المستخدمين:\n\n"
+        "🔄 للإلغاء أرسل /cancel"
+    )
+
+async def broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إرسال إذاعة مع صورة"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ هذا الإجراء للأدمن فقط!", show_alert=True)
+        return
+    
+    context.user_data['admin_action'] = 'waiting_broadcast_photo'
+    await query.message.edit_text(
+        "🖼️ **إذاعة مع صورة**\n\n"
+        "1️⃣ أرسل **الصورة**\n"
+        "2️⃣ ثم أرسل **النص** (اختياري)\n\n"
+        "🔄 للإلغاء أرسل /cancel"
+    )
+
+async def broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إرسال إذاعة مع فيديو"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ هذا الإجراء للأدمن فقط!", show_alert=True)
+        return
+    
+    context.user_data['admin_action'] = 'waiting_broadcast_video'
+    await query.message.edit_text(
+        "🎬 **إذاعة مع فيديو**\n\n"
+        "1️⃣ أرسل **الفيديو**\n"
+        "2️⃣ ثم أرسل **النص** (اختياري)\n\n"
+        "🔄 للإلغاء أرسل /cancel"
+    )
+
+async def broadcast_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض إحصائيات المستخدمين"""
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(query.from_user.id):
+        await query.answer("⚠️ هذا الإجراء للأدمن فقط!", show_alert=True)
+        return
+    
+    user_count = len(get_all_users())
+    text = f"📊 **إحصائيات المستخدمين**\n\n👥 عدد المستخدمين: {user_count}\n"
+    
+    if user_count > 0:
+        # عرض آخر 5 مستخدمين
+        text += "\n🆕 **آخر 5 مستخدمين:**\n"
+        sorted_users = sorted(users.items(), key=lambda x: x[1].get('joined_at', ''), reverse=True)
+        for i, (uid, data) in enumerate(sorted_users[:5], 1):
+            name = data.get('first_name', 'مجهول')
+            username = data.get('username', '')
+            text += f"{i}. {name} (@{username}) - {data.get('joined_at', '')[:10]}\n"
+    
+    keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data='admin_broadcast')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(text, reply_markup=reply_markup)
+
+# =============== معالجات الإذاعة ===============
+
+async def handle_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة إذاعة نصية"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_text':
+        text = update.message.text.strip()
+        
+        if not text:
+            await update.message.reply_text("⚠️ يرجى إرسال نص صحيح!")
+            return
+        
+        # إرسال الإذاعة
+        await send_broadcast(update, context, text=text)
+
+async def handle_broadcast_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة إذاعة مع صورة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_photo':
+        if update.message.photo:
+            # حفظ الصورة مؤقتاً
+            photo_file = await update.message.photo[-1].get_file()
+            file_id = photo_file.file_id
+            context.user_data['broadcast_photo'] = file_id
+            context.user_data['admin_action'] = 'waiting_broadcast_photo_caption'
+            await update.message.reply_text(
+                "✅ تم استلام الصورة!\n\n📝 أرسل النص المرافق (أو أرسل /skip للتخطي):"
+            )
+        else:
+            await update.message.reply_text("⚠️ يرجى إرسال صورة!")
+
+async def handle_broadcast_photo_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة نص الصورة للإذاعة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_photo_caption':
+        text = update.message.text.strip()
+        photo_file_id = context.user_data.get('broadcast_photo')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, photo=photo_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_photo'] = None
+
+async def handle_broadcast_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة إذاعة مع فيديو"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_video':
+        if update.message.video:
+            video_file_id = update.message.video.file_id
+            context.user_data['broadcast_video'] = video_file_id
+            context.user_data['admin_action'] = 'waiting_broadcast_video_caption'
+            await update.message.reply_text(
+                "✅ تم استلام الفيديو!\n\n📝 أرسل النص المرافق (أو أرسل /skip للتخطي):"
+            )
+        else:
+            await update.message.reply_text("⚠️ يرجى إرسال فيديو!")
+
+async def handle_broadcast_video_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة نص الفيديو للإذاعة"""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        return
+    
+    if context.user_data.get('admin_action') == 'waiting_broadcast_video_caption':
+        text = update.message.text.strip()
+        video_file_id = context.user_data.get('broadcast_video')
+        
+        if text == '/skip':
+            text = None
+        
+        await send_broadcast(update, context, video=video_file_id, caption=text)
+        context.user_data['admin_action'] = None
+        context.user_data['broadcast_video'] = None
+
+# =============== دوال إرسال الإذاعة ===============
+
+async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, text=None, photo=None, video=None, caption=None):
+    """إرسال الإذاعة لجميع المستخدمين"""
+    user_ids = get_all_users()
+    total = len(user_ids)
+    
+    if total == 0:
+        await update.message.reply_text("⚠️ لا يوجد مستخدمين لإرسال الإذاعة لهم!")
+        return
+    
+    # إرسال رسالة البداية
+    msg = await update.message.reply_text(f"📢 جاري إرسال الإذاعة...\n👥 المستخدمين: {total}")
+    
+    success = 0
+    failed = 0
+    
+    for uid in user_ids:
+        try:
+            user_id = int(uid)
+            
+            if photo:
+                # إرسال صورة
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo,
+                    caption=caption or text
+                )
+            elif video:
+                # إرسال فيديو
+                await context.bot.send_video(
+                    chat_id=user_id,
+                    video=video,
+                    caption=caption or text
+                )
+            else:
+                # إرسال نص
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=text
+                )
+            success += 1
+            
+            # تأخير بسيط لتجنب الحظر
+            if success % 10 == 0:
+                await asyncio.sleep(0.5)
+                
+        except Exception as e:
+            failed += 1
+            logger.error(f"Failed to send broadcast to {uid}: {e}")
+    
+    # إرسال النتيجة
+    await msg.edit_text(
+        f"✅ **تم إرسال الإذاعة!**\n\n"
+        f"✅ نجح: {success}\n"
+        f"❌ فشل: {failed}\n"
+        f"👥 المجموع: {total}"
+    )
+
+# =============== دوال البداية ===============
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء البوت"""
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name
+    
+    # حفظ المستخدم
+    save_user(user_id, username, first_name)
+    context.user_data.clear()
     
     if is_admin(user_id):
         keyboard = [
             [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
             [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📢 الإذاعة", callback_data='admin_broadcast')],
             [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
             [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        text = f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}"
+        await update.message.reply_text(
+            f"👋 مرحباً أيها الأدمن!\n\n"
+            f"📹 عدد المقاطع: {len(videos)}\n"
+            f"📂 عدد القوائم: {len(playlists)}\n"
+            f"👥 عدد المستخدمين: {len(get_all_users())}\n"
+            f"👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}",
+            reply_markup=reply_markup
+        )
+        return
+    
+    if is_moderator(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"👋 مرحباً أيها المشرف!\n\n"
+            f"📹 عدد المقاطع: {len(videos)}\n"
+            f"📂 عدد القوائم: {len(playlists)}",
+            reply_markup=reply_markup
+        )
+        return
+    
+    # للمستخدم العادي
+    try:
+        member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            await show_user_menu(update, context)
+        else:
+            keyboard = [
+                [InlineKeyboardButton("📢 اشترك في القناة", url=f'https://t.me/{CHANNEL_USERNAME}')],
+                [InlineKeyboardButton("✅ تحقق", callback_data='check_subscription')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"⚠️ يرجى الاشتراك في القناة:\n👉 @{CHANNEL_USERNAME}",
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await update.message.reply_text("⚠️ حدث خطأ!")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إلغاء العملية الحالية"""
+    user_id = update.effective_user.id
+    if is_staff(user_id):
+        context.user_data.clear()
+        await update.message.reply_text("✅ تم الإلغاء!")
+        await start(update, context)
+
+# =============== دوال الرجوع ===============
+
+async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """العودة للقائمة الرئيسية"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    context.user_data.clear()
+    
+    if is_admin(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
+            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
+            [InlineKeyboardButton("📢 الإذاعة", callback_data='admin_broadcast')],
+            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
+            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        text = f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👥 عدد المستخدمين: {len(get_all_users())}"
     elif is_moderator(user_id):
         keyboard = [
             [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
@@ -112,14 +465,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
         reply_markup = InlineKeyboardMarkup(keyboard)
         text = f"👋 مرحباً أيها المشرف!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}"
     else:
-        # للمستخدم العادي
-        await show_user_menu(update, context)
+        await show_user_menu(update, context, edit=True)
         return
     
-    if edit and query:
-        await query.message.edit_text(text, reply_markup=reply_markup)
-    else:
-        await update.message.reply_text(text, reply_markup=reply_markup)
+    await query.message.edit_text(text, reply_markup=reply_markup)
+
+# =============== دوال المستخدم ===============
 
 async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=False):
     """عرض قائمة المستخدم"""
@@ -144,47 +495,7 @@ async def show_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, edi
     else:
         await update.message.reply_text(text, reply_markup=reply_markup)
 
-# =============== دوال البداية ===============
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدء البوت"""
-    user_id = update.effective_user.id
-    context.user_data.clear()
-    
-    if is_admin(user_id) or is_moderator(user_id):
-        await show_main_menu(update, context)
-    else:
-        # للمستخدم العادي - التحقق من الاشتراك
-        try:
-            member = await context.bot.get_chat_member(f'@{CHANNEL_USERNAME}', user_id)
-            if member.status in ['member', 'administrator', 'creator']:
-                await show_user_menu(update, context)
-            else:
-                keyboard = [
-                    [InlineKeyboardButton("📢 اشترك في القناة", url=f'https://t.me/{CHANNEL_USERNAME}')],
-                    [InlineKeyboardButton("✅ تحقق", callback_data='check_subscription')]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await update.message.reply_text(
-                    f"⚠️ يرجى الاشتراك في القناة:\n👉 @{CHANNEL_USERNAME}",
-                    reply_markup=reply_markup
-                )
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            await update.message.reply_text("⚠️ حدث خطأ!")
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إلغاء العملية الحالية"""
-    user_id = update.effective_user.id
-    if is_staff(user_id):
-        context.user_data.clear()
-        await update.message.reply_text("✅ تم الإلغاء!")
-        await start(update, context)
-
-# =============== دوال المستخدم ===============
-
 async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض جميع المقاطع"""
     query = update.callback_query
     await query.answer()
     
@@ -201,13 +512,11 @@ async def show_all_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(f"🎥 **جميع المقاطع** ({len(videos)})", reply_markup=reply_markup)
 
 async def back_to_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """العودة لقائمة المستخدم"""
     query = update.callback_query
     await query.answer()
     await show_user_menu(update, context, edit=True)
 
 async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """التحقق من الاشتراك"""
     query = update.callback_query
     await query.answer()
     
@@ -226,7 +535,6 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # =============== دوال تشغيل الفيديو ===============
 
 async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تشغيل مقطع فيديو"""
     query = update.callback_query
     await query.answer()
     
@@ -263,7 +571,6 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption += f"\n\n🔰 {watermark}"
             
             await query.message.reply_video(videos[video_name], caption=caption)
-            logger.info(f"Video '{video_name}' sent to user {user_id}")
         except Exception as e:
             logger.error(f"Error sending video: {e}")
             await query.message.reply_text("⚠️ حدث خطأ في إرسال الفيديو")
@@ -273,7 +580,6 @@ async def play_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============== دوال إدارة المقاطع ===============
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لوحة تحكم الأدمن"""
     query = update.callback_query
     await query.answer()
     
@@ -290,14 +596,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(
-        f"📊 **لوحة تحكم الأدمن**\n\n"
-        f"📹 عدد المقاطع: {len(videos)}\n"
-        f"📂 عدد القوائم: {len(playlists)}",
+        f"📊 **لوحة تحكم الأدمن**\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}",
         reply_markup=reply_markup
     )
 
 async def admin_add_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إضافة مقطع جديد"""
     query = update.callback_query
     await query.answer()
     
@@ -307,14 +610,10 @@ async def admin_add_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_action'] = 'waiting_video_name'
     await query.message.edit_text(
-        "📤 **إضافة مقطع جديد**\n\n"
-        "1️⃣ أرسل **اسم** المقطع\n"
-        "2️⃣ ثم أرسل **الفيديو**\n\n"
-        "🔄 للإلغاء أرسل /cancel"
+        "📤 **إضافة مقطع جديد**\n\n1️⃣ أرسل **اسم** المقطع\n2️⃣ ثم أرسل **الفيديو**\n\n🔄 للإلغاء أرسل /cancel"
     )
 
 async def handle_video_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة اسم المقطع"""
     user_id = update.effective_user.id
     
     if not is_staff(user_id):
@@ -332,7 +631,6 @@ async def handle_video_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ تم حفظ الاسم: **{video_name}**\n\n📤 أرسل الفيديو الآن")
 
 async def handle_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة الفيديو المرسل"""
     user_id = update.effective_user.id
     
     if not is_staff(user_id):
@@ -350,14 +648,12 @@ async def handle_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['video_name'] = None
             
             await update.message.reply_text(
-                f"✅ تم إضافة المقطع **{video_name}** بنجاح!\n"
-                f"📹 عدد المقاطع الآن: {len(videos)}"
+                f"✅ تم إضافة المقطع **{video_name}** بنجاح!\n📹 عدد المقاطع الآن: {len(videos)}"
             )
         else:
             await update.message.reply_text("⚠️ يرجى إرسال **فيديو** وليس نص أو صورة.")
 
 async def admin_delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف مقطع"""
     query = update.callback_query
     await query.answer()
     
@@ -378,7 +674,6 @@ async def admin_delete_video(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.message.edit_text("❌ **اختر المقطع للحذف:**", reply_markup=reply_markup)
 
 async def delete_video_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف مقطع محدد"""
     query = update.callback_query
     await query.answer()
     
@@ -403,7 +698,6 @@ async def delete_video_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("❌ المقطع غير موجود!", show_alert=True)
 
 async def admin_list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض جميع المقاطع"""
     query = update.callback_query
     await query.answer()
     
@@ -424,7 +718,6 @@ async def admin_list_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text(text, reply_markup=reply_markup)
 
 async def admin_delete_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف جميع المقاطع"""
     query = update.callback_query
     await query.answer()
     
@@ -443,7 +736,6 @@ async def admin_delete_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def confirm_delete_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تأكيد حذف جميع المقاطع"""
     query = update.callback_query
     await query.answer()
     
@@ -460,7 +752,6 @@ async def confirm_delete_all(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # =============== دوال إدارة القوائم ===============
 
 async def admin_playlists(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لوحة إدارة القوائم"""
     query = update.callback_query
     await query.answer()
     
@@ -479,14 +770,11 @@ async def admin_playlists(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text(
-        f"📂 **إدارة القوائم**\n\n"
-        f"📂 عدد القوائم: {len(playlists)}\n"
-        f"📹 عدد المقاطع الكلي: {len(videos)}",
+        f"📂 **إدارة القوائم**\n\n📂 عدد القوائم: {len(playlists)}\n📹 عدد المقاطع الكلي: {len(videos)}",
         reply_markup=reply_markup
     )
 
 async def create_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إنشاء قائمة جديدة"""
     query = update.callback_query
     await query.answer()
     
@@ -496,47 +784,10 @@ async def create_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_action'] = 'waiting_playlist_name'
     await query.message.edit_text(
-        "📂 **إنشاء قائمة جديدة**\n\n"
-        "✏️ أرسل **اسم القائمة**\n"
-        "مثال: أجمل الأهداف\n\n"
-        "🔄 للإلغاء أرسل /cancel"
+        "📂 **إنشاء قائمة جديدة**\n\n✏️ أرسل **اسم القائمة**\nمثال: أجمل الأهداف\n\n🔄 للإلغاء أرسل /cancel"
     )
 
-async def handle_playlist_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة اسم القائمة الجديدة"""
-    user_id = update.effective_user.id
-    
-    if not is_staff(user_id):
-        return
-    
-    admin_action = context.user_data.get('admin_action')
-    
-    if admin_action == 'waiting_playlist_name':
-        playlist_name = update.message.text.strip()
-        
-        if not playlist_name:
-            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
-            return
-        
-        if playlist_name in playlists:
-            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{playlist_name}'")
-            return
-        
-        playlists[playlist_name] = []
-        save_playlists(playlists)
-        
-        context.user_data['admin_action'] = None
-        
-        await update.message.reply_text(
-            f"✅ تم إنشاء القائمة **{playlist_name}** بنجاح!\n"
-            f"📂 القائمة فارغة حالياً، يمكنك إضافة مقاطع لها.\n\n"
-            f"استخدم /start للعودة للقائمة الرئيسية"
-        )
-    else:
-        await update.message.reply_text("⚠️ لا توجد عملية نشطة. استخدم /start")
-
 async def add_to_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إضافة مقطع لقائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -557,7 +808,6 @@ async def add_to_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text("📂 **اختر القائمة لإضافة مقطع لها:**", reply_markup=reply_markup)
 
 async def select_playlist_for_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اختيار قائمة لإضافة مقطع لها"""
     query = update.callback_query
     await query.answer()
     
@@ -582,7 +832,6 @@ async def select_playlist_for_add(update: Update, context: ContextTypes.DEFAULT_
     await query.message.edit_text(f"📂 **إضافة مقطع لقائمة {playlist_name}:**", reply_markup=reply_markup)
 
 async def add_video_to_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إضافة مقطع محدد لقائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -605,7 +854,6 @@ async def add_video_to_playlist_callback(update: Update, context: ContextTypes.D
             await query.answer("⚠️ هذا المقطع موجود بالفعل!", show_alert=True)
 
 async def delete_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف قائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -626,7 +874,6 @@ async def delete_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.edit_text("❌ **اختر القائمة للحذف:**", reply_markup=reply_markup)
 
 async def delete_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تأكيد حذف قائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -642,7 +889,6 @@ async def delete_playlist_callback(update: Update, context: ContextTypes.DEFAULT
         await query.answer("❌ القائمة غير موجودة!", show_alert=True)
 
 async def list_playlists(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض جميع القوائم"""
     query = update.callback_query
     await query.answer()
     
@@ -671,7 +917,6 @@ async def list_playlists(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============== دوال القوائم الفرعية ===============
 
 async def create_sub_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إنشاء قائمة فرعية"""
     query = update.callback_query
     await query.answer()
     
@@ -692,7 +937,6 @@ async def create_sub_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.message.edit_text("📂 **اختر القائمة الرئيسية للقائمة الفرعية:**", reply_markup=reply_markup)
 
 async def select_sub_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اختيار القائمة الرئيسية للقائمة الفرعية"""
     query = update.callback_query
     await query.answer()
     
@@ -701,56 +945,12 @@ async def select_sub_parent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['admin_action'] = 'waiting_sub_playlist_name'
     
     await query.message.edit_text(
-        f"📂 **قائمة فرعية في: {parent_name}**\n\n"
-        "✏️ أرسل اسم القائمة الفرعية:\n"
-        "مثال: أهداف 2024\n\n"
-        "🔄 للإلغاء أرسل /cancel"
+        f"📂 **قائمة فرعية في: {parent_name}**\n\n✏️ أرسل اسم القائمة الفرعية:\nمثال: أهداف 2024\n\n🔄 للإلغاء أرسل /cancel"
     )
-
-async def handle_sub_playlist_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة اسم القائمة الفرعية"""
-    user_id = update.effective_user.id
-    
-    if not is_staff(user_id):
-        return
-    
-    admin_action = context.user_data.get('admin_action')
-    
-    if admin_action == 'waiting_sub_playlist_name':
-        sub_name = update.message.text.strip()
-        parent_name = context.user_data.get('parent_playlist')
-        
-        if not sub_name:
-            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
-            return
-        
-        if not parent_name or parent_name not in playlists:
-            await update.message.reply_text("⚠️ حدث خطأ! القائمة الرئيسية غير موجودة.")
-            return
-        
-        full_name = f"{parent_name} › {sub_name}"
-        
-        if full_name in playlists:
-            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{sub_name}' في {parent_name}")
-            return
-        
-        playlists[full_name] = []
-        save_playlists(playlists)
-        
-        context.user_data['admin_action'] = None
-        context.user_data['parent_playlist'] = None
-        
-        await update.message.reply_text(
-            f"✅ تم إنشاء القائمة الفرعية **{sub_name}**\n"
-            f"📂 ضمن القائمة: **{parent_name}**"
-        )
-    else:
-        await update.message.reply_text("⚠️ لا توجد عملية نشطة. استخدم /start")
 
 # =============== دوال ترتيب القوائم ===============
 
 async def reorder_playlist_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اختيار قائمة لترتيبها"""
     query = update.callback_query
     await query.answer()
     
@@ -776,7 +976,6 @@ async def reorder_playlist_select(update: Update, context: ContextTypes.DEFAULT_
     await query.message.edit_text("↕️ **اختر قائمة لترتيب مقاطعها:**", reply_markup=reply_markup)
 
 async def reorder_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدء ترتيب قائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -796,7 +995,6 @@ async def reorder_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_reorder_options(update, context)
 
 async def show_reorder_options(update: Update, context: ContextTypes.DEFAULT_TYPE, edit=True):
-    """عرض خيارات ترتيب المقطع"""
     playlist_name = context.user_data.get('reorder_playlist')
     index = context.user_data.get('reorder_index', 0)
     
@@ -836,7 +1034,6 @@ async def show_reorder_options(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def move_video_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نقل المقطع لأعلى"""
     query = update.callback_query
     await query.answer()
     
@@ -852,7 +1049,6 @@ async def move_video_up(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_reorder_options(update, context)
 
 async def move_video_down(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نقل المقطع لأسفل"""
     query = update.callback_query
     await query.answer()
     
@@ -868,7 +1064,6 @@ async def move_video_down(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await show_reorder_options(update, context)
 
 async def skip_reorder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تخطي المقطع الحالي"""
     query = update.callback_query
     await query.answer()
     
@@ -876,7 +1071,6 @@ async def skip_reorder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_reorder_options(update, context)
 
 async def finish_reorder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إنهاء ترتيب القائمة"""
     query = update.callback_query
     await query.answer()
     
@@ -891,7 +1085,6 @@ async def finish_reorder(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============== دوال عرض القوائم للمستخدم ===============
 
 async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض مقاطع قائمة محددة"""
     query = update.callback_query
     await query.answer()
     
@@ -938,7 +1131,6 @@ async def show_playlist_videos(update: Update, context: ContextTypes.DEFAULT_TYP
 # =============== دوال الإحصائيات ===============
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض الإحصائيات"""
     query = update.callback_query
     await query.answer()
     
@@ -957,8 +1149,9 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"📊 **الإحصائيات**\n\n"
     text += f"📹 المقاطع: {len(videos)}\n"
     text += f"📂 القوائم: {len(playlists)}\n"
+    text += f"👥 المستخدمين: {len(get_all_users())}\n"
     text += f"👀 المشاهدات: {total_views}\n"
-    text += f"👥 المستخدمين: {len(total_users)}\n\n"
+    text += f"👤 مستخدمين فريدين: {len(total_users)}\n\n"
     
     if top_videos:
         text += "🏆 **أكثر المقاطع مشاهدة:**\n"
@@ -972,7 +1165,6 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =============== دوال العلامة المائية ===============
 
 async def admin_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """لوحة إدارة العلامة المائية"""
     query = update.callback_query
     await query.answer()
     
@@ -1002,7 +1194,6 @@ async def admin_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def watermark_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """طلب صورة العلامة المائية"""
     query = update.callback_query
     await query.answer()
     
@@ -1012,13 +1203,10 @@ async def watermark_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_action'] = 'waiting_watermark_image'
     await query.message.edit_text(
-        "🖼️ **إضافة علامة مائية (صورة)**\n\n"
-        "أرسل صورة PNG شفافة\n"
-        "🔄 للإلغاء أرسل /cancel"
+        "🖼️ **إضافة علامة مائية (صورة)**\n\nأرسل صورة PNG شفافة\n🔄 للإلغاء أرسل /cancel"
     )
 
 async def watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """طلب نص العلامة المائية"""
     query = update.callback_query
     await query.answer()
     
@@ -1028,14 +1216,10 @@ async def watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['admin_action'] = 'waiting_watermark_text'
     await query.message.edit_text(
-        "📝 **إضافة علامة مائية (نص)**\n\n"
-        "أرسل النص المطلوب\n"
-        "مثال: @bexo50\n\n"
-        "🔄 للإلغاء أرسل /cancel"
+        "📝 **إضافة علامة مائية (نص)**\n\nأرسل النص المطلوب\nمثال: @bexo50\n\n🔄 للإلغاء أرسل /cancel"
     )
 
 async def handle_watermark_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة نص العلامة المائية"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1049,7 +1233,6 @@ async def handle_watermark_text(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(f"✅ تم تعيين النص: `{text}`")
 
 async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة صورة العلامة المائية"""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
@@ -1065,7 +1248,6 @@ async def handle_watermark_image(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⚠️ أرسل صورة PNG!")
 
 async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إزالة العلامة المائية"""
     query = update.callback_query
     await query.answer()
     
@@ -1079,38 +1261,98 @@ async def watermark_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.message.edit_text("✅ تم إزالة العلامة المائية!")
 
-# =============== دوال الرجوع ===============
+# =============== معالج الرسائل الشامل ===============
 
-async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """العودة للقائمة الرئيسية"""
-    query = update.callback_query
-    await query.answer()
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج كل الرسائل النصية"""
+    user_id = update.effective_user.id
     
-    user_id = query.from_user.id
-    context.user_data.clear()
-    
-    if is_admin(user_id):
-        keyboard = [
-            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
-            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
-            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')],
-            [InlineKeyboardButton("🔰 العلامة المائية", callback_data='admin_watermark')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        text = f"👋 مرحباً أيها الأدمن!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}\n👀 إجمالي المشاهدات: {sum(s.get('views', 0) for s in stats.values())}"
-    elif is_moderator(user_id):
-        keyboard = [
-            [InlineKeyboardButton("📹 إدارة المقاطع", callback_data='admin_panel')],
-            [InlineKeyboardButton("📂 إدارة القوائم", callback_data='admin_playlists')],
-            [InlineKeyboardButton("📊 الإحصائيات", callback_data='admin_stats')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        text = f"👋 مرحباً أيها المشرف!\n\n📹 عدد المقاطع: {len(videos)}\n📂 عدد القوائم: {len(playlists)}"
-    else:
-        await show_user_menu(update, context, edit=True)
+    if not is_staff(user_id):
         return
     
-    await query.message.edit_text(text, reply_markup=reply_markup)
+    admin_action = context.user_data.get('admin_action')
+    
+    # معالجة الإذاعة النصية
+    if admin_action == 'waiting_broadcast_text':
+        await handle_broadcast_text(update, context)
+        return
+    
+    # معالجة اسم القائمة
+    if admin_action == 'waiting_playlist_name':
+        playlist_name = update.message.text.strip()
+        
+        if not playlist_name:
+            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
+            return
+        
+        if playlist_name in playlists:
+            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{playlist_name}'")
+            return
+        
+        playlists[playlist_name] = []
+        save_playlists(playlists)
+        
+        context.user_data['admin_action'] = None
+        
+        await update.message.reply_text(
+            f"✅ تم إنشاء القائمة **{playlist_name}** بنجاح!\n"
+            f"📂 القائمة فارغة حالياً، يمكنك إضافة مقاطع لها."
+        )
+        return
+    
+    # معالجة اسم المقطع
+    if admin_action == 'waiting_video_name':
+        await handle_video_name(update, context)
+        return
+    
+    # معالجة اسم القائمة الفرعية
+    if admin_action == 'waiting_sub_playlist_name':
+        sub_name = update.message.text.strip()
+        parent_name = context.user_data.get('parent_playlist')
+        
+        if not sub_name:
+            await update.message.reply_text("⚠️ يرجى إرسال اسم صحيح!")
+            return
+        
+        if not parent_name or parent_name not in playlists:
+            await update.message.reply_text("⚠️ حدث خطأ! القائمة الرئيسية غير موجودة.")
+            return
+        
+        full_name = f"{parent_name} › {sub_name}"
+        
+        if full_name in playlists:
+            await update.message.reply_text(f"⚠️ توجد قائمة بنفس الاسم '{sub_name}' في {parent_name}")
+            return
+        
+        playlists[full_name] = []
+        save_playlists(playlists)
+        
+        context.user_data['admin_action'] = None
+        context.user_data['parent_playlist'] = None
+        
+        await update.message.reply_text(
+            f"✅ تم إنشاء القائمة الفرعية **{sub_name}**\n📂 ضمن القائمة: **{parent_name}**"
+        )
+        return
+    
+    # معالجة نص العلامة المائية
+    if admin_action == 'waiting_watermark_text':
+        await handle_watermark_text(update, context)
+        return
+    
+    # معالجة نص الصورة للإذاعة
+    if admin_action == 'waiting_broadcast_photo_caption':
+        await handle_broadcast_photo_caption(update, context)
+        return
+    
+    # معالجة نص الفيديو للإذاعة
+    if admin_action == 'waiting_broadcast_video_caption':
+        await handle_broadcast_video_caption(update, context)
+        return
+    
+    # إذا لم تكن هناك حالة نشطة
+    if update.message:
+        await update.message.reply_text("⚠️ لا توجد عملية نشطة. استخدم /start")
 
 # =============== main ===============
 
@@ -1121,6 +1363,7 @@ def main():
     # أوامر عامة
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("skip", lambda u, c: None))  # لـ /skip
     
     # لوحة الأدمن
     application.add_handler(CallbackQueryHandler(admin_panel, pattern='^admin_panel$'))
@@ -1162,19 +1405,25 @@ def main():
     # الإحصائيات
     application.add_handler(CallbackQueryHandler(admin_stats, pattern='^admin_stats$'))
     
+    # الإذاعة
+    application.add_handler(CallbackQueryHandler(admin_broadcast, pattern='^admin_broadcast$'))
+    application.add_handler(CallbackQueryHandler(broadcast_text, pattern='^broadcast_text$'))
+    application.add_handler(CallbackQueryHandler(broadcast_photo, pattern='^broadcast_photo$'))
+    application.add_handler(CallbackQueryHandler(broadcast_video, pattern='^broadcast_video$'))
+    application.add_handler(CallbackQueryHandler(broadcast_stats, pattern='^broadcast_stats$'))
+    
     # العلامة المائية
     application.add_handler(CallbackQueryHandler(admin_watermark, pattern='^admin_watermark$'))
     application.add_handler(CallbackQueryHandler(watermark_image, pattern='^watermark_image$'))
     application.add_handler(CallbackQueryHandler(watermark_text, pattern='^watermark_text$'))
     application.add_handler(CallbackQueryHandler(watermark_remove, pattern='^watermark_remove$'))
     
-    # معالجة الرسائل
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_video_name))
+    # معالجة الرسائل - معالج واحد شامل
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_messages))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video_file))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_playlist_name))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_watermark_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_watermark_image))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sub_playlist_name))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_broadcast_photo))
+    application.add_handler(MessageHandler(filters.VIDEO, handle_broadcast_video))
     
     # تشغيل البوت
     if os.getenv('RAILWAY_ENVIRONMENT'):
@@ -1185,4 +1434,5 @@ def main():
         application.run_polling()
 
 if __name__ == '__main__':
+    import asyncio
     main()
